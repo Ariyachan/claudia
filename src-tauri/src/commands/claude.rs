@@ -11,6 +11,12 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use regex;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Global state to track current Claude process
 pub struct ClaudeProcessState {
     pub current_process: Arc<Mutex<Option<Child>>>,
@@ -248,6 +254,12 @@ fn create_command_with_env(program: &str) -> Command {
             tokio_cmd.env(&key, &value);
         }
     }
+    
+    // Hide console window on Windows
+    #[cfg(target_os = "windows")]
+    {
+        tokio_cmd.creation_flags(CREATE_NO_WINDOW);
+    }
 
     // Add NVM support if the program is in an NVM directory
     if program.contains("/.nvm/versions/node/") {
@@ -280,6 +292,12 @@ fn create_system_command(
     cmd.current_dir(project_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    
+    // Hide the console window on Windows
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     
     cmd
 }
@@ -505,6 +523,12 @@ pub async fn open_new_session(app: AppHandle, path: Option<String>) -> Result<St
             cmd.current_dir(&project_path);
         }
 
+        // Hide console window on Windows
+        #[cfg(target_os = "windows")]
+        {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
         // Execute the command
         match cmd.spawn() {
             Ok(_) => {
@@ -575,9 +599,14 @@ pub async fn check_claude_version(app: AppHandle) -> Result<ClaudeVersionStatus,
 
     #[cfg(debug_assertions)]
     {
-        let output = std::process::Command::new(claude_path)
-            .arg("--version")
-            .output();
+        let mut cmd = std::process::Command::new(claude_path);
+        cmd.arg("--version");
+        #[cfg(target_os = "windows")]
+        {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        
+        let output = cmd.output();
 
         match output {
             Ok(output) => {
@@ -978,9 +1007,13 @@ pub async fn cancel_claude_execution(
                     if let Some(pid) = pid {
                         log::info!("Attempting system kill as last resort for PID: {}", pid);
                         let kill_result = if cfg!(target_os = "windows") {
-                            std::process::Command::new("taskkill")
-                                .args(["/F", "/PID", &pid.to_string()])
-                                .output()
+                            let mut cmd = std::process::Command::new("taskkill");
+                            cmd.args(["/F", "/PID", &pid.to_string()]);
+                            #[cfg(target_os = "windows")]
+                            {
+                                cmd.creation_flags(CREATE_NO_WINDOW);
+                            }
+                            cmd.output()
                         } else {
                             std::process::Command::new("kill")
                                 .args(["-KILL", &pid.to_string()])
@@ -2040,6 +2073,12 @@ pub async fn validate_hook_command(command: String) -> Result<serde_json::Value,
     cmd.arg("-n") // Syntax check only
        .arg("-c")
        .arg(&command);
+    
+    // Hide console window on Windows
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     
     match cmd.output() {
         Ok(output) => {
